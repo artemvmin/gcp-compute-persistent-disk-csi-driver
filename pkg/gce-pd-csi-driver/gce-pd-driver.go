@@ -158,7 +158,7 @@ func NewControllerServer(gceDriver *GCEDriver, cloudProvider gce.GCECompute, err
 		CloudProvider: cloudProvider,
 		seen:          map[string]int{},
 		volumeLocks:   common.NewVolumeLocks(),
-		errorBackoff:  newCsiErrorBackoff(errorBackoffInitialDuration, errorBackoffMaxDuration),
+		errorBackoff:  newCSIErrorBackoff(errorBackoffInitialDuration, errorBackoffMaxDuration),
 	}
 }
 
