@@ -46,7 +46,9 @@ var (
 
 	errorBackoffInitialDurationMs = flag.Int("backoff-initial-duration-ms", 200, "The amount of ms for the initial duration of the backoff condition for controller publish/unpublish CSI operations. Default is 200.")
 	errorBackoffMaxDurationMs     = flag.Int("backoff-max-duration-ms", 300000, "The amount of ms for the max duration of the backoff condition for controller publish/unpublish CSI operations. Default is 300000 (5m).")
-	extraVolumeLabelsStr          = flag.String("extra-labels", "", "Extra labels to attach to each PD created. It is a comma separated list of key value pairs like '<key1>=<value1>,<key2>=<value2>'. See https://cloud.google.com/compute/docs/labeling-resources for details")
+	unpublishMaxAttempts          = flag.Int("unpublish-max-attempts", 20, "The amount of times unpublish will fail before a disk NotFound is treated as success. With exponential backoff and the existing initial and max duration values (200 and 300000 ms, respectively), the max duration is hit after the 10th attempt. This equates to roughly an hour of errors.")
+
+	extraVolumeLabelsStr = flag.String("extra-labels", "", "Extra labels to attach to each PD created. It is a comma separated list of key value pairs like '<key1>=<value1>,<key2>=<value2>'. See https://cloud.google.com/compute/docs/labeling-resources for details")
 
 	attachDiskBackoffDuration = flag.Duration("attach-disk-backoff-duration", 5*time.Second, "Duration for attachDisk backoff")
 	attachDiskBackoffFactor   = flag.Float64("attach-disk-backoff-factor", 0.0, "Factor for attachDisk backoff")
@@ -128,7 +130,7 @@ func handle() {
 		}
 		initialBackoffDuration := time.Duration(*errorBackoffInitialDurationMs) * time.Millisecond
 		maxBackoffDuration := time.Duration(*errorBackoffMaxDurationMs) * time.Millisecond
-		controllerServer = driver.NewControllerServer(gceDriver, cloudProvider, initialBackoffDuration, maxBackoffDuration)
+		controllerServer = driver.NewControllerServer(gceDriver, cloudProvider, initialBackoffDuration, maxBackoffDuration, *unpublishMaxAttempts)
 	} else if *cloudConfigFilePath != "" {
 		klog.Warningf("controller service is disabled but cloud config given - it has no effect")
 	}

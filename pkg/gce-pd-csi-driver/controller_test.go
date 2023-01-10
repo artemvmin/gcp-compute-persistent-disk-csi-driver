@@ -71,6 +71,8 @@ var (
 	errorBackoffMaxDuration     = 5 * time.Minute
 )
 
+const unpublishMaxAttempts = 20
+
 func TestCreateSnapshotArguments(t *testing.T) {
 	thetime, _ := time.Parse(time.RFC3339, gce.Timestamp)
 	tp := timestamppb.New(thetime)
@@ -2315,7 +2317,7 @@ func TestControllerUnpublishSucceedsAfterMaxAttempts(t *testing.T) {
 		}
 	)
 
-	for i := 0; i < maxUnpublishAttempts; i++ {
+	for i := 0; i < unpublishMaxAttempts; i++ {
 		if err := runUnpublishRequest(req, true); err == nil {
 			t.Errorf("call %d succeeded; expected error", i)
 		}
@@ -2530,11 +2532,12 @@ func backoffDriver(t *testing.T, config *backoffDriverConfig) *GCEDriver {
 
 	driver := GetGCEDriver()
 	driver.cs = &GCEControllerServer{
-		Driver:        driver,
-		CloudProvider: fcpBlocking,
-		seen:          map[string]int{},
-		volumeLocks:   common.NewVolumeLocks(),
-		errorBackoff:  newFakeCSIErrorBackoff(config.clock),
+		Driver:               driver,
+		CloudProvider:        fcpBlocking,
+		seen:                 map[string]int{},
+		volumeLocks:          common.NewVolumeLocks(),
+		errorBackoff:         newFakeCSIErrorBackoff(config.clock),
+		unpublishMaxAttempts: unpublishMaxAttempts,
 	}
 	return driver
 }

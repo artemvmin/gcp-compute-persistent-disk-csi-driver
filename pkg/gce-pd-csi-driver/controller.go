@@ -86,6 +86,10 @@ type GCEControllerServer struct {
 	// publish/unpublish call will clear the backoff condition for a node and
 	// disk.
 	errorBackoff *csiErrorBackoff
+
+	// The maximum number of unpublish attempts before a GCE NotFound error is
+	// treated as a success unpublish.
+	unpublishMaxAttempts int
 }
 
 type action int
@@ -96,8 +100,8 @@ const (
 )
 
 type csiErrorBackoff struct {
-	backoff  *flowcontrol.Backoff
-	attempts map[action]map[csiErrorBackoffId]int
+	backoff           *flowcontrol.Backoff
+	attemptsForAction map[action]map[csiErrorBackoffId]int
 }
 type csiErrorBackoffId string
 
@@ -126,9 +130,6 @@ const (
 	// but 500 is a good proxy (gives ~8KB of data per ListVolumesResponse#Entry)
 	// See https://github.com/grpc/grpc/blob/master/include/grpc/impl/codegen/grpc_types.h#L503)
 	maxListVolumesResponseEntries = 500
-
-	// The maximum number of unpublish attempts before success.
-	maxUnpublishAttempts = 20
 )
 
 func isDiskReady(disk *gce.CloudDisk) (bool, error) {
@@ -563,12 +564,15 @@ func (gceCS *GCEControllerServer) ControllerUnpublishVolume(ctx context.Context,
 	}
 
 	resp, err := gceCS.executeControllerUnpublishVolume(ctx, req)
-	if err != nil {
-		klog.Infof("For node %s adding backoff due to error for volume %s", req.NodeId, req.VolumeId)
-		gceCS.errorBackoff.next(backoffId, unpublish)
-	} else {
+	notFound := status.Code(err) == codes.NotFound
+	atMaxAttempts := gceCS.errorBackoff.attempts(backoffId, unpublish) > gceCS.unpublishMaxAttempts
+
+	if err == nil || notFound && atMaxAttempts {
 		klog.Infof("For node %s clear backoff due to successful unpublish of volume %v", req.NodeId, req.VolumeId)
 		gceCS.errorBackoff.reset(backoffId, unpublish)
+	} else {
+		klog.Infof("For node %s adding backoff due to error for volume %s", req.NodeId, req.VolumeId)
+		gceCS.errorBackoff.next(backoffId, unpublish)
 	}
 	return resp, err
 }
@@ -1615,8 +1619,8 @@ func newCSIErrorBackoffWithOverride(backoff *flowcontrol.Backoff) *csiErrorBacko
 	attempts[unpublish] = make(map[csiErrorBackoffId]int)
 
 	return &csiErrorBackoff{
-		backoff:  backoff,
-		attempts: attempts,
+		backoff:           backoff,
+		attemptsForAction: attempts,
 	}
 }
 
@@ -1624,25 +1628,24 @@ func (_ *csiErrorBackoff) backoffId(nodeId, volumeId string) csiErrorBackoffId {
 	return csiErrorBackoffId(fmt.Sprintf("%s:%s", nodeId, volumeId))
 }
 
+func (b *csiErrorBackoff) attempts(id csiErrorBackoffId, action action) int {
+	return b.attemptsForAction[action][id]
+}
+
 func (b *csiErrorBackoff) blocking(id csiErrorBackoffId, action action) bool {
-	if action == unpublish && b.attempts[action][id] > maxUnpublishAttempts {
-		// Assume the volume has been deleted.
-		return true
-	}
-	blk := b.backoff.IsInBackOffSinceUpdate(string(id), b.backoff.Clock.Now())
-	return blk
+	return b.backoff.IsInBackOffSinceUpdate(string(id), b.backoff.Clock.Now())
 }
 
 func (b *csiErrorBackoff) next(id csiErrorBackoffId, action action) {
 	if action == unpublish {
-		b.attempts[action][id]++
+		b.attemptsForAction[action][id]++
 	}
 	b.backoff.Next(string(id), b.backoff.Clock.Now())
 }
 
 func (b *csiErrorBackoff) reset(id csiErrorBackoffId, action action) {
 	if action == unpublish {
-		delete(b.attempts[action], id)
+		delete(b.attemptsForAction[action], id)
 	}
 	b.backoff.Reset(string(id))
 }
